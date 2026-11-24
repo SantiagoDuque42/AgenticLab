@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from miniagent.agent.tools import safe_path
+from miniagent.agent.tools import run_tests, safe_path
 from miniagent.harness.grade import grade
 from miniagent.harness.tasks import TASKS_DIR, load_task, load_tasks, prepare_workspace
 
@@ -15,18 +15,33 @@ def test_tasks_load():
     assert TOY in ids
 
 
-def test_toy_task_fails_before_fix(tmp_path: Path):
-    task = load_task(TASKS_DIR / TOY)
+ALL_TASKS = [t.id for t in load_tasks()]
+
+
+@pytest.mark.parametrize("task_id", ALL_TASKS)
+def test_task_fails_before_fix(tmp_path: Path, task_id: str):
+    """A task whose hidden tests already pass measures nothing."""
+    task = load_task(TASKS_DIR / task_id)
     repo = prepare_workspace(task, tmp_path)
     assert not grade(task, repo).passed
 
 
-def test_toy_task_passes_after_fix(tmp_path: Path):
-    task = load_task(TASKS_DIR / TOY)
+@pytest.mark.parametrize("task_id", ALL_TASKS)
+def test_task_passes_with_reference_solution(tmp_path: Path, task_id: str):
+    """A task nobody can pass measures nothing either: prove a fix exists."""
+    task = load_task(TASKS_DIR / task_id)
     repo = prepare_workspace(task, tmp_path)
-    fixed = (repo / "src/chunks.py").read_text().replace("len(items) - size + 1", "len(items)")
-    (repo / "src/chunks.py").write_text(fixed)
-    assert grade(task, repo).passed
+    shutil.copytree(task.solution_dir, repo, dirs_exist_ok=True)
+    result = grade(task, repo)
+    assert result.passed, result.output
+
+
+@pytest.mark.parametrize("task_id", ALL_TASKS)
+def test_visible_tests_pass_at_start(tmp_path: Path, task_id: str):
+    """Visible tests are the agent's starting signal; they must run cleanly."""
+    task = load_task(TASKS_DIR / task_id)
+    repo = prepare_workspace(task, tmp_path)
+    assert run_tests(repo).text.startswith("exit code: 0")
 
 
 def test_starting_repo_is_untouched(tmp_path: Path):

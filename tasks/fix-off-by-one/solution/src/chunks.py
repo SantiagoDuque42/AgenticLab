@@ -1,0 +1,8 @@
+def chunk(items: list, size: int) -> list[list]:
+    """Split `items` into consecutive chunks of at most `size` items."""
+    if size <= 0:
+        raise ValueError("size must be positive")
+    chunks = []
+    for start in range(0, len(items), size):
+        chunks.append(items[start : start + size])
+    return chunks

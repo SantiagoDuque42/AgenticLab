@@ -1,0 +1,7 @@
+prompt: |
+  Order totals are wrong when a percentage discount is applied: a 10% discount on
+  an order of 100.0 should give 90.0, but customers are charged almost the full
+  price. Find the cause and fix it. Run the tests before you finish.
+max_steps: 20
+timeout_s: 300
+tags: [multi-file, bugfix, needs-search]

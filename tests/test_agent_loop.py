@@ -74,7 +74,9 @@ def test_scripted_run_fixes_toy_task(tmp_path: Path):
     task, repo = _toy_repo(tmp_path)
     client = FakeClient(
         [
-            _tool_call("t1", "read_file", {"path": "src/chunks.py"}),
+            _tool_call(
+                "t1", "read_file", {"path": "src/chunks.py", "start_line": None, "end_line": None}
+            ),
             _tool_call("t2", "write_file", {"path": "src/chunks.py", "content": FIXED_CHUNKS}),
             _tool_call("t3", "run_tests", {}),
             _message([{"type": "text", "text": "Fixed the range bound."}], "end_turn"),
@@ -133,8 +135,9 @@ def test_max_tokens_is_reported_as_error(tmp_path: Path):
 
 
 def test_tools_return_errors_instead_of_raising(tmp_path: Path):
-    escape = execute_tool("read_file", {"path": "../../etc/passwd"}, tmp_path)
-    missing = execute_tool("read_file", {"path": "nope.py"}, tmp_path)
+    no_range = {"start_line": None, "end_line": None}
+    escape = execute_tool("read_file", {"path": "../../etc/passwd", **no_range}, tmp_path)
+    missing = execute_tool("read_file", {"path": "nope.py", **no_range}, tmp_path)
     unknown = execute_tool("delete_everything", {}, tmp_path)
 
     assert escape.is_error and "escapes" in escape.text
@@ -150,3 +153,33 @@ def test_failing_tests_are_not_a_tool_error(tmp_path: Path):
 
     assert not output.is_error
     assert output.text.startswith("exit code: 1")
+
+
+def test_scripted_run_uses_search_and_edit_on_multi_file_task(tmp_path: Path):
+    task = load_task(TASKS_DIR / "fix-discount-multi-file")
+    repo = prepare_workspace(task, tmp_path)
+    client = FakeClient(
+        [
+            _tool_call("t1", "list_dir", {"path": "."}),
+            _tool_call("t2", "grep", {"pattern": "def apply_discount", "path": None}),
+            _tool_call(
+                "t3",
+                "edit_file",
+                {
+                    "path": "src/discounts.py",
+                    "old_str": "percent / 1000",
+                    "new_str": "percent / 100",
+                },
+            ),
+            _tool_call("t4", "run_tests", {}),
+            _message([{"type": "text", "text": "Fixed the divisor."}], "end_turn"),
+        ]
+    )
+
+    result = run_agent(task.id, task.prompt, repo, AgentConfig(model="fake"), client=client)
+
+    assert result.stop_reason == StopReason.FINISHED
+    assert grade(task, repo).passed
+    # The grep result the model saw pointed it at the right file.
+    grep_result = client.messages.requests[2]["messages"][-1]["content"][0]["content"]
+    assert grep_result.startswith("src/discounts.py:1:")

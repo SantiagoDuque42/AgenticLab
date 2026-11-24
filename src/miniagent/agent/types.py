@@ -12,6 +12,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from miniagent.agent.tools import DEFAULT_TOOLS
+
 
 class StopReason(StrEnum):
     FINISHED = "finished"  # the model called `finish` or stopped asking for tools
@@ -28,16 +30,21 @@ class AgentConfig(BaseModel):
     role: str = "coder"
     system_prompt: str = (
         "You are a careful software engineer working in a Python repository. "
-        "Read the relevant code before changing it, make the smallest change that "
-        "solves the task, and run the tests after each change. When the tests pass "
-        "and the task is done, reply with a short summary of what you changed and "
-        "stop calling tools."
+        "Get oriented first: list the repo, then use grep and glob to find the code "
+        "the task is about, and read it before changing it. Make the smallest change "
+        "that solves the task, using edit_file for existing files. Run the tests after "
+        "each change. When the tests pass and the task is done, reply with a short "
+        "summary of what you changed and stop calling tools."
     )
-    tools: list[str] = Field(default_factory=lambda: ["read_file", "write_file", "run_tests"])
+    tools: list[str] = Field(default_factory=lambda: list(DEFAULT_TOOLS))
     max_steps: int = 30
     max_tokens: int = 16000
     effort: str | None = None  # "low" | "medium" | "high" ...; None = the model's default
     timeout_s: int = 600
+    # How run_tests runs. None = pytest under miniagent's interpreter (benchmark tasks).
+    # For a real repo use its own command, e.g. "uv run pytest".
+    test_command: str | None = None
+    test_timeout_s: int = 120
 
 
 class RunResult(BaseModel):
