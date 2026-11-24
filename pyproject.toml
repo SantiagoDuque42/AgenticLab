@@ -5,7 +5,7 @@ description = "A from-scratch coding agent with its own eval harness"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic>=0.40",
+    "anthropic>=2.13",
     "pydantic>=2.7",
     "typer>=0.12",
     "rich>=13.7",
