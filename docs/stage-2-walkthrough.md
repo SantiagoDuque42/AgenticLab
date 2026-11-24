@@ -355,6 +355,18 @@ At the end, `run-repo` prints the usual token totals, the change summary, the pa
 `changes.patch` and to the edited files (open `work/` in VS Code to browse them), the
 `git apply` command if you want the changes, and the `rm -rf` to clean up.
 
+**Decision: POSIX only (Linux, macOS, WSL); refuse to start on native Windows.** Three
+of the safety layers above assume a POSIX system: the `git` shim is a `#!/bin/sh`
+script, the timeout kill uses process groups (`os.killpg`, `SIGKILL`), and `bash`
+expects a POSIX shell (on Windows `shell=True` means cmd.exe). On native Windows the
+shim would silently be skipped, leaving only the regex guard between the agent and
+`git commit`. A tool that quietly runs with weaker guarantees is worse than one that
+refuses, so a typer `@app.callback()` runs `require_posix()` before every command and
+exits with a pointer to WSL. *Rejected:* porting each layer (a `git.cmd` shim,
+`taskkill /T` or job objects, Git Bash detection, Windows CI). It's doable, but it
+doubles the surface to test, and WSL gives the same Linux behaviour for free.
+*Try it:* `tests/test_cli.py` fakes `os.name = "nt"` to check the refusal.
+
 ---
 
 ## 9. Tests

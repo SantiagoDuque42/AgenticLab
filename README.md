@@ -7,6 +7,9 @@ that beats a single agent.
 
 ## Quick start
 
+Runs on Linux, macOS or WSL. On Windows, use WSL (`wsl --install -d Ubuntu`) and reach
+your repos at `/mnt/c/...`; the CLI refuses to start on native Windows.
+
 ```bash
 uv sync
 cp .env.example .env              # add your ANTHROPIC_API_KEY and model names

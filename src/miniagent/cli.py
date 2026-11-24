@@ -22,6 +22,26 @@ from miniagent.workspace import create_workspace, default_test_command, write_pa
 app = typer.Typer(no_args_is_help=True)
 console = Console()
 
+WSL_HINT = (
+    "miniagent runs on Linux, macOS or WSL, not native Windows: its safety layers "
+    "(the read-only git shim, process-group kill on timeout, a POSIX shell for `bash`) "
+    "need a POSIX system. On Windows, run it inside WSL: `wsl --install -d Ubuntu`, "
+    "then use it from the Ubuntu shell with your repo at /mnt/c/..."
+)
+
+
+def require_posix() -> None:
+    """Refuse to start on native Windows rather than run with weaker safety guarantees."""
+    if os.name != "posix":
+        console.print(f"[red]{WSL_HINT}[/red]")
+        raise typer.Exit(code=2)
+
+
+@app.callback()
+def _main() -> None:
+    """miniagent: a small coding agent with its own eval harness."""
+    require_posix()
+
 
 @app.command()
 def tasks() -> None:
