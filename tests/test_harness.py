@@ -55,3 +55,27 @@ def test_safe_path_blocks_escape(tmp_path: Path):
     assert safe_path(tmp_path, "a/b.py") == (tmp_path / "a/b.py").resolve()
     with pytest.raises(ValueError):
         safe_path(tmp_path, "../outside.py")
+
+
+def test_shared_files_are_copied_into_the_workspace(tmp_path: Path):
+    task = load_task(TASKS_DIR / "cmapss-rul-target")
+    repo = prepare_workspace(task, tmp_path)
+    assert (repo / "data" / "train_FD001.txt.gz").exists()
+    # The held-out test set stays out of the agent's workspace.
+    assert not list(repo.rglob("test_FD001*")) and not list(repo.rglob("RUL_FD001*"))
+
+
+def test_grade_collects_metrics(tmp_path: Path):
+    task = load_task(TASKS_DIR / "cmapss-rul-target")
+    repo = prepare_workspace(task, tmp_path)
+    shutil.copytree(task.solution_dir, repo, dirs_exist_ok=True)
+    result = grade(task, repo)
+    assert result.passed, result.output
+    assert 0 < result.metrics["test_rmse"] <= 19.0
+
+
+def test_record_metric_is_a_noop_outside_grading(monkeypatch):
+    from miniagent.harness.metrics import METRICS_FILE_ENV, record_metric
+
+    monkeypatch.delenv(METRICS_FILE_ENV, raising=False)
+    record_metric("x", 1.0)  # must not raise

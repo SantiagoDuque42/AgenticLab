@@ -222,3 +222,19 @@ def test_git_shim_blocks_writes_the_regex_cannot_see(repo: Path):
 
     allowed = run(repo, "bash", command="git --version", timeout_s=None)
     assert "git version" in allowed.text
+
+
+def test_bash_python_env_is_the_repos_unless_shared(repo: Path, monkeypatch):
+    """Real repos must not see miniagent's venv; benchmark tasks run in it on purpose."""
+    monkeypatch.setenv("VIRTUAL_ENV", "/miniagent/.venv")
+    cmd = {"command": "echo venv=${VIRTUAL_ENV:-none}", "timeout_s": None}
+    assert "venv=none" in execute_tool("bash", cmd, repo).text
+    shared = execute_tool("bash", cmd, repo, share_python_env=True)
+    assert "venv=/miniagent/.venv" in shared.text
+    own_python = execute_tool(
+        "bash",
+        {"command": "python -c 'import sys; print(sys.prefix)'", "timeout_s": None},
+        repo,
+        share_python_env=True,
+    )
+    assert os.path.realpath(tools.sys.prefix) in os.path.realpath(own_python.text.split()[-1])

@@ -1,0 +1,13 @@
+prompt: |
+  The nightly training job for this turbofan RUL model failed last night; the log is
+  logs/nightly-2026-11-23.log (logs/nightly-2026-11-16.log is the last good run).
+  Get the job working again by fixing the root cause, not by hiding the symptom.
+  CHANGES.md lists what changed since the last good run: review those changes for
+  anything else that would make the nightly numbers wrong, and fix that too.
+  Keep the public functions' signatures. Run `python -m rul.nightly` and the tests
+  before you finish.
+max_steps: 40
+timeout_s: 900
+tags: [mlops, debugging, root-cause, multi-file, cmapss]
+shared:
+  data/train_FD001.txt.gz: cmapss/train_FD001.txt.gz

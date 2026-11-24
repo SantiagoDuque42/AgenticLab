@@ -142,6 +142,7 @@ def _run_tool_calls(
             repo_path,
             test_command=config.test_command,
             test_timeout_s=config.test_timeout_s,
+            share_python_env=config.share_python_env,
         )
         results.append(
             {

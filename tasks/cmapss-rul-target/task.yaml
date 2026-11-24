@@ -1,0 +1,16 @@
+prompt: |
+  This repo predicts the remaining useful life (RUL) of turbofan engines from the
+  NASA C-MAPSS FD001 dataset (data/train_FD001.txt.gz, 100 engines run to failure).
+  The model is scored on the official FD001 test set, which you don't have: for
+  each of 100 engines cut off before failure, the RUL predicted at its last cycle,
+  scored by RMSE. The current model scores about 32. Get it to 19 or better.
+
+  `python -m rul.evaluate` prints a validation RMSE that mimics the test set; use it
+  to compare ideas, and keep a short note of what you tried and what it scored.
+  Keep the signatures of `rul.pipeline.fit` and `RULModel.predict_last`. Only numpy
+  is available. Run the tests before you finish.
+max_steps: 50
+timeout_s: 1500
+tags: [mlops, experiment-loop, metric-target, cmapss]
+shared:
+  data/train_FD001.txt.gz: cmapss/train_FD001.txt.gz

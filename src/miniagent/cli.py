@@ -57,6 +57,8 @@ def grade_cmd(task_id: str, repo: Path) -> None:
     """Grade an existing repo directory against a task's hidden tests."""
     result = grade(load_task(TASKS_DIR / task_id), repo)
     console.print(result.output)
+    for name, value in result.metrics.items():
+        console.print(f"{name}: {value:.3f}")
     console.print("[green]PASS[/green]" if result.passed else "[red]FAIL[/red]")
     raise typer.Exit(0 if result.passed else 1)
 
@@ -80,7 +82,14 @@ def run(
     task = load_task(TASKS_DIR / task_id)
     workdir = Path(tempfile.mkdtemp(prefix="miniagent-"))
     repo = prepare_workspace(task, workdir)
-    config = _config(model, effort, tools, max_steps=task.max_steps, timeout_s=task.timeout_s)
+    config = _config(
+        model,
+        effort,
+        tools,
+        max_steps=task.max_steps,
+        timeout_s=task.timeout_s,
+        share_python_env=True,  # task repos use miniagent's env (numpy etc.)
+    )
     transcript = _transcript_path(task.id)
 
     result = run_agent(
@@ -89,6 +98,8 @@ def run(
     graded = grade(task, repo)
 
     _print_result(result, transcript)
+    for name, value in graded.metrics.items():
+        console.print(f"{name}: {value:.3f}")
     if keep:
         console.print(f"workspace: {repo}")
     console.print("[green]PASS[/green]" if graded.passed else "[red]FAIL[/red]")
