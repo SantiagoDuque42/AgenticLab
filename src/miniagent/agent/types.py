@@ -45,6 +45,10 @@ class AgentConfig(BaseModel):
     # For a real repo use its own command, e.g. "uv run pytest".
     test_command: str | None = None
     test_timeout_s: int = 120
+    # True for benchmark tasks: their commands run in miniagent's own Python env
+    # (where the task's libraries, e.g. numpy, are installed). False for real repos,
+    # whose commands must use the repo's own environment.
+    share_python_env: bool = False
 
 
 class RunResult(BaseModel):

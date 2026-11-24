@@ -17,6 +17,11 @@ miniagent = "miniagent.cli:app"
 
 [dependency-groups]
 dev = ["pytest>=8.2", "ruff>=0.6"]
+# Libraries the benchmark task repos import. Tasks share miniagent's environment.
+tasks = ["numpy>=2.0"]
+
+[tool.uv]
+default-groups = ["dev", "tasks"]
 
 [build-system]
 requires = ["hatchling"]

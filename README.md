@@ -24,7 +24,9 @@ uv run --env-file .env miniagent run-repo ~/code/myproject "Fix the failing test
 
 How the loop works and why each piece is built the way it is:
 [docs/milestone-1-walkthrough.md](docs/milestone-1-walkthrough.md), then
-[docs/stage-2-walkthrough.md](docs/stage-2-walkthrough.md).
+[docs/stage-2-walkthrough.md](docs/stage-2-walkthrough.md). The real-world ML tasks
+(C-MAPSS turbofan RUL: hit a metric target, debug a failed nightly run) are explained
+in [docs/mlops-tasks-walkthrough.md](docs/mlops-tasks-walkthrough.md).
 
 ## Layout
 
@@ -37,6 +39,7 @@ src/miniagent/
   harness/
     tasks.py     # load tasks, copy a fresh repo per run
     grade.py     # add hidden tests to the final repo and run pytest
+    metrics.py   # record_metric(): numbers like test RMSE, reported by hidden tests
   workspace.py   # run-repo workspaces: copy + baseline, changes.patch
   cli.py         # `miniagent tasks | run | run-repo | grade`
 tasks/<id>/
@@ -44,6 +47,7 @@ tasks/<id>/
   repo/          # starting code
   hidden_tests/  # never shown to the agent
   solution/      # reference fix, proves the task is passable
+tasks/_shared/   # datasets several tasks use (C-MAPSS FD001), listed under `shared:`
 runs/            # transcripts and results (gitignored)
 ```
 

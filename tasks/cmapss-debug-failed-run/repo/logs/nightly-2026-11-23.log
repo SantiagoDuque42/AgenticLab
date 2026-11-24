@@ -1,0 +1,10 @@
+2026-11-23 02:00:02,874 INFO nightly loaded 20631 rows, 100 units
+2026-11-23 02:00:02,903 WARNING py.warnings /srv/turbofan/rul/model.py:20: RuntimeWarning: invalid value encountered in divide
+  return (x - self.mean) / self.std
+
+2026-11-23 02:00:02,990 INFO nightly validation RMSE nan
+2026-11-23 02:00:02,990 ERROR nightly training failed
+Traceback (most recent call last):
+  File "/srv/turbofan/rul/nightly.py", line 34, in main
+    raise RuntimeError(f"validation RMSE is {score}")
+RuntimeError: validation RMSE is nan

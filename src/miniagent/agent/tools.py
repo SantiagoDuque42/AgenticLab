@@ -416,22 +416,26 @@ def _git_shim_dir() -> str | None:
     return str(shim_dir)
 
 
-def _clean_env(repo_path: Path | None = None) -> dict[str, str]:
-    """The parent environment minus secrets and minus miniagent's own virtualenv.
+def _clean_env(repo_path: Path | None = None, share_python_env: bool = False) -> dict[str, str]:
+    """The parent environment minus secrets and (usually) minus miniagent's own virtualenv.
 
     Secrets: the agent's commands never see API keys.
     VIRTUAL_ENV and PATH: without this, `uv run` or `python` inside a target repo would pick up
-    miniagent's venv instead of the repo's own environment.
+    miniagent's venv instead of the repo's own environment. Benchmark tasks are the
+    exception (`share_python_env`): they have no environment of their own and use
+    miniagent's, so a bare `python` must find numpy there.
     """
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(SECRET_ENV_PREFIXES) and k != "VIRTUAL_ENV"
+        if not k.startswith(SECRET_ENV_PREFIXES) and (share_python_env or k != "VIRTUAL_ENV")
     }
     # `uv run miniagent` also puts miniagent's venv/bin first on PATH; drop it so a bare
     # `python` or `pytest` in the target repo resolves to that repo's tools.
     own_bin = str(Path(sys.prefix) / "bin")
-    if sys.prefix != sys.base_prefix and "PATH" in env:
+    if share_python_env:
+        env["PATH"] = os.pathsep.join([own_bin, env.get("PATH", "")])
+    elif sys.prefix != sys.base_prefix and "PATH" in env:
         env["PATH"] = os.pathsep.join(p for p in env["PATH"].split(os.pathsep) if p != own_bin)
     # Git: read-only shim first on PATH; ignore the user's global git config (aliases,
     # hooks, credential helpers); and never walk up out of the workspace to find a repo.
@@ -445,14 +449,20 @@ def _clean_env(repo_path: Path | None = None) -> dict[str, str]:
     return env
 
 
-def _run(cmd: list[str] | str, repo_path: Path, timeout_s: int, shell: bool) -> ToolOutput:
+def _run(
+    cmd: list[str] | str,
+    repo_path: Path,
+    timeout_s: int,
+    shell: bool,
+    share_python_env: bool = False,
+) -> ToolOutput:
     # start_new_session puts the command in its own process group, so on timeout we can
     # kill everything it spawned, not just the shell that started it.
     proc = subprocess.Popen(
         cmd,
         cwd=repo_path,
         shell=shell,
-        env=_clean_env(repo_path),
+        env=_clean_env(repo_path, share_python_env),
         stdin=subprocess.DEVNULL,  # anything that waits for input fails fast instead
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,  # one stream, in the order things happened
@@ -486,7 +496,9 @@ def blocked_reason(command: str) -> str | None:
     return None
 
 
-def bash(repo_path: Path, command: str, timeout_s: int | None) -> ToolOutput:
+def bash(
+    repo_path: Path, command: str, timeout_s: int | None, *, share_python_env: bool = False
+) -> ToolOutput:
     reason = blocked_reason(command)
     if reason:
         return ToolOutput(
@@ -496,7 +508,7 @@ def bash(repo_path: Path, command: str, timeout_s: int | None) -> ToolOutput:
         )
     timeout = min(max(timeout_s or BASH_DEFAULT_TIMEOUT_S, 1), BASH_MAX_TIMEOUT_S)
     # A non-zero exit code is a result, not a tool error: the command ran.
-    return _run(command, repo_path, timeout, shell=True)
+    return _run(command, repo_path, timeout, shell=True, share_python_env=share_python_env)
 
 
 def run_tests(
@@ -530,11 +542,13 @@ def execute_tool(
     *,
     test_command: str | None = None,
     test_timeout_s: int = TEST_TIMEOUT_S,
+    share_python_env: bool = False,
 ) -> ToolOutput:
     """Run one tool call. Never raises: every failure becomes an error ToolOutput.
 
-    `test_command` / `test_timeout_s` are run settings, not model inputs: the model
-    calls run_tests with no arguments, and the harness decides how tests run.
+    `test_command`, `test_timeout_s` and `share_python_env` are run settings, not
+    model inputs: the model calls run_tests with no arguments, and the harness
+    decides how tests and commands run.
     """
     impl = _IMPLEMENTATIONS.get(name)
     if impl is None:
@@ -542,6 +556,8 @@ def execute_tool(
     try:
         if name == "run_tests":
             return run_tests(repo_path, test_command, test_timeout_s)
+        if name == "bash":
+            return bash(repo_path, **tool_input, share_python_env=share_python_env)
         return impl(repo_path, **tool_input)
     except (ValueError, OSError, UnicodeDecodeError, TypeError, subprocess.SubprocessError) as exc:
         return ToolOutput(f"{type(exc).__name__}: {exc}", is_error=True)
