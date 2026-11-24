@@ -20,12 +20,14 @@ docs/stage-2-walkthrough.md:
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,10 +59,27 @@ BLOCKED_COMMANDS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"), "power commands"),
     (re.compile(r":\(\)\s*\{.*\};\s*:"), "fork bomb"),
     (re.compile(r"\b(curl|wget)\b[^|]*\|\s*(ba|z)?sh\b"), "piping a download into a shell"),
-    (re.compile(r"\bgit\s+push\b"), "git push"),
     (re.compile(r"\bchmod\s+(-\w+\s+)*[0-7]*777\s+/"), "chmod 777 on system paths"),
     (re.compile(r">\s*/dev/sd[a-z]"), "writing to a disk device"),
 ]
+
+# Git: the agent may look, never write. miniagent never commits, pushes, or changes
+# branches. Only these subcommands are allowed; everything else is refused, both by
+# blocked_reason() below and by the `git` shim put first on PATH (see _git_shim_dir).
+READONLY_GIT_SUBCOMMANDS = (
+    "status",
+    "diff",
+    "log",
+    "show",
+    "blame",
+    "grep",
+    "ls-files",
+    "rev-parse",
+    "--version",
+)
+_GIT_CALL = re.compile(
+    r"(?:^|[\s;&|(`$'\"])git((?:\s+-[Cc]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*)\s+([^\s'\";|&)]+)"
+)
 
 # Environment variables the agent's shell must never see.
 SECRET_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "AWS_", "GITHUB_TOKEN", "GH_TOKEN")
@@ -368,7 +387,36 @@ def write_file(repo_path: Path, path: str, content: str) -> ToolOutput:
 # --- Run -----------------------------------------------------------------------------
 
 
-def _clean_env() -> dict[str, str]:
+_GIT_SHIM = """#!/bin/sh
+# Installed by miniagent: the agent may only run read-only git commands.
+case "$1" in
+  {allowed}) exec "{real_git}" "$@" ;;
+esac
+echo "miniagent: 'git $1' is disabled. The agent never writes to git (read-only: {allowed})." >&2
+exit 1
+"""
+
+
+@functools.cache
+def _git_shim_dir() -> str | None:
+    """A directory holding a fake `git` that only forwards read-only subcommands.
+
+    The command deny-list only sees the command line the model wrote. A script the agent
+    writes and runs, `sh -c`, or a Python subprocess would slip past it. Putting this
+    shim first on PATH catches every `git` found through PATH, whoever calls it. It does
+    not stop someone calling the real binary by absolute path; Stage 4's sandbox does.
+    """
+    real_git = shutil.which("git")
+    if not real_git or os.name != "posix":
+        return None
+    shim_dir = Path(tempfile.mkdtemp(prefix="miniagent-git-shim-"))
+    shim = shim_dir / "git"
+    shim.write_text(_GIT_SHIM.format(allowed="|".join(READONLY_GIT_SUBCOMMANDS), real_git=real_git))
+    shim.chmod(0o755)
+    return str(shim_dir)
+
+
+def _clean_env(repo_path: Path | None = None) -> dict[str, str]:
     """The parent environment minus secrets and minus miniagent's own virtualenv.
 
     Secrets: the agent's commands never see API keys.
@@ -385,6 +433,15 @@ def _clean_env() -> dict[str, str]:
     own_bin = str(Path(sys.prefix) / "bin")
     if sys.prefix != sys.base_prefix and "PATH" in env:
         env["PATH"] = os.pathsep.join(p for p in env["PATH"].split(os.pathsep) if p != own_bin)
+    # Git: read-only shim first on PATH; ignore the user's global git config (aliases,
+    # hooks, credential helpers); and never walk up out of the workspace to find a repo.
+    shim = _git_shim_dir()
+    if shim:
+        env["PATH"] = os.pathsep.join([shim, env.get("PATH", "")])
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if repo_path is not None:
+        env["GIT_CEILING_DIRECTORIES"] = str(repo_path.resolve().parent)
     return env
 
 
@@ -395,7 +452,7 @@ def _run(cmd: list[str] | str, repo_path: Path, timeout_s: int, shell: bool) -> 
         cmd,
         cwd=repo_path,
         shell=shell,
-        env=_clean_env(),
+        env=_clean_env(repo_path),
         stdin=subprocess.DEVNULL,  # anything that waits for input fails fast instead
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,  # one stream, in the order things happened
@@ -418,6 +475,14 @@ def blocked_reason(command: str) -> str | None:
     for pattern, reason in BLOCKED_COMMANDS:
         if pattern.search(command):
             return reason
+    for match in _GIT_CALL.finditer(command):
+        options, subcommand = match.groups()
+        # -C, -c, --git-dir and --work-tree point git at another repo or rewrite config:
+        # refuse them. Harmless flags such as --no-pager pass.
+        repo_switch = re.search(r"(^|\s)(-[Cc](\s|$)|--git-dir|--work-tree)", options)
+        if repo_switch or subcommand not in READONLY_GIT_SUBCOMMANDS:
+            allowed = ", ".join(READONLY_GIT_SUBCOMMANDS[:-1])
+            return f"git is read-only for the agent; allowed: {allowed}"
     return None
 
 

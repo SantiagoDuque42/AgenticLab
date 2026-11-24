@@ -182,3 +182,43 @@ def test_bash_guard_blocks_obvious_destruction(repo: Path, command: str):
 )
 def test_bash_guard_allows_normal_commands(command: str):
     assert tools.blocked_reason(command) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m x",
+        "git add .",
+        "cd src && git reset --hard",
+        "git -C /elsewhere status",
+        "git --git-dir=/elsewhere/.git log",
+        "sh -c 'git push origin main'",
+        "git checkout -b feature",
+        "git stash",
+    ],
+)
+def test_git_is_read_only(command: str):
+    assert tools.blocked_reason(command) is not None
+
+
+@pytest.mark.parametrize(
+    "command", ["git status", "git diff --stat", "git --no-pager log -5", "git show HEAD"]
+)
+def test_read_only_git_is_allowed(command: str):
+    assert tools.blocked_reason(command) is None
+
+
+@pytest.mark.skipif(not tools.shutil.which("git"), reason="git not installed")
+def test_git_shim_blocks_writes_the_regex_cannot_see(repo: Path):
+    # A Python script that shells out to git: invisible to the command-line guard.
+    (repo / "sneaky.py").write_text(
+        "import subprocess\n"
+        "r = subprocess.run(['git', 'init'], capture_output=True, text=True)\n"
+        "print('rc', r.returncode, r.stderr.strip())\n"
+    )
+    out = run(repo, "bash", command="python3 sneaky.py", timeout_s=None)
+    assert "rc 1" in out.text and "disabled" in out.text
+    assert not (repo / ".git").exists()
+
+    allowed = run(repo, "bash", command="git --version", timeout_s=None)
+    assert "git version" in allowed.text
