@@ -1,0 +1,7 @@
+prompt: |
+  `chunk(items, size)` in src/chunks.py should split a list into consecutive
+  chunks of at most `size` items, but the last items are sometimes dropped.
+  Fix the bug. Run the tests before you finish.
+max_steps: 15
+timeout_s: 300
+tags: [one-file, bugfix, toy]
