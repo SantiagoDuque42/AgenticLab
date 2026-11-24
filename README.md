@@ -14,7 +14,8 @@ uv run pytest -q                  # harness self-tests
 uv run miniagent tasks            # list benchmark tasks
 uv run --env-file .env miniagent run fix-off-by-one   # live run, costs a few cents
 
-# Your own repo: the agent works in a git worktree (or a copy), never the original
+# Your own repo: the agent works on a copy. Your repo and its git are never touched;
+# you get a changes.patch to review and apply yourself.
 uv run --env-file .env miniagent run-repo ~/code/myproject "Fix the failing test in tests/test_api.py"
 ```
 
@@ -33,7 +34,7 @@ src/miniagent/
   harness/
     tasks.py     # load tasks, copy a fresh repo per run
     grade.py     # add hidden tests to the final repo and run pytest
-  workspace.py   # git worktree / copy workspaces for run-repo
+  workspace.py   # run-repo workspaces: copy + baseline, changes.patch
   cli.py         # `miniagent tasks | run | run-repo | grade`
 tasks/<id>/
   task.yaml      # prompt, limits, tags
@@ -54,4 +55,4 @@ runs/            # transcripts and results (gitignored)
 7. Code-search retrieval tool against plain grep
 8. Portfolio write-up
 
-Then: multi-agent orchestrator (planner, coders in parallel worktrees, reviewer).
+Then: multi-agent orchestrator (planner, coders in parallel workspaces, reviewer).

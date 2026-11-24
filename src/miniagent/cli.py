@@ -17,7 +17,7 @@ from miniagent.agent.loop import run_agent
 from miniagent.agent.tools import TOOL_SCHEMAS
 from miniagent.harness.grade import grade
 from miniagent.harness.tasks import RUNS_DIR, TASKS_DIR, load_task, load_tasks, prepare_workspace
-from miniagent.workspace import create_workspace, default_test_command, diff_stat
+from miniagent.workspace import create_workspace, default_test_command, write_patch
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -87,14 +87,13 @@ def run_repo(
         help="How to run this repo's tests. Default: 'uv run pytest -q' if it has a "
         "pyproject.toml, otherwise 'python -m pytest -q'.",
     ),
-    copy: bool = typer.Option(
-        False, "--copy", help="Copy the folder instead of using a git worktree."
-    ),
     max_steps: int = typer.Option(40, help="Hard cap on model calls."),
     timeout_s: int = typer.Option(1200, help="Hard cap on wall time for the whole run."),
     test_timeout_s: int = typer.Option(300, help="Timeout for one test run."),
 ) -> None:
-    """Run the agent on your own repository, in a separate workspace. No grading."""
+    """Run the agent on a copy of your repository. Your repo and its git are never touched.
+
+    You get a changes.patch to review, and apply yourself if you want it. No grading."""
     # Validate everything before creating the workspace, so a typo leaves nothing behind.
     config = _config(
         model,
@@ -105,14 +104,11 @@ def run_repo(
         test_timeout_s=test_timeout_s,
     )
     try:
-        workspace = create_workspace(path, force_copy=copy)
+        workspace = create_workspace(path)
     except (ValueError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[bold]workspace[/bold] ({workspace.mode}): {workspace.path}")
-    if workspace.branch:
-        console.print(f"branch: {workspace.branch}")
-    if workspace.warning:
-        console.print(f"[yellow]warning:[/yellow] {workspace.warning}")
+    console.print(f"[bold]workspace[/bold] (a copy): {workspace.path}")
+    console.print(f"your repo is not modified, and its git gets nothing: {workspace.source}")
 
     config.test_command = test_command or default_test_command(workspace.path)
     console.print(f"tests run with: {config.test_command}")
@@ -129,8 +125,12 @@ def run_repo(
 
     _print_result(result, transcript)
     console.rule("changes")
-    console.print(diff_stat(workspace))
-    console.print(f"\nreview:   code {workspace.path}   (or: git -C {workspace.path} diff)")
+    console.print(write_patch(workspace))
+    console.print(f"\npatch:    {workspace.patch_path}")
+    console.print(f"files:    {workspace.path}   (open in VS Code: code {workspace.path})")
+    console.print(
+        f"apply it yourself, if you want it: git -C {workspace.source} apply {workspace.patch_path}"
+    )
     console.print(f"clean up: {workspace.cleanup_hint()}")
 
 
