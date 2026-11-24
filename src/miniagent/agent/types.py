@@ -27,12 +27,16 @@ class AgentConfig(BaseModel):
     model: str
     role: str = "coder"
     system_prompt: str = (
-        "You are a careful software engineer. Explore the repository, make the "
-        "smallest change that fixes the task, and run the tests before finishing."
+        "You are a careful software engineer working in a Python repository. "
+        "Read the relevant code before changing it, make the smallest change that "
+        "solves the task, and run the tests after each change. When the tests pass "
+        "and the task is done, reply with a short summary of what you changed and "
+        "stop calling tools."
     )
     tools: list[str] = Field(default_factory=lambda: ["read_file", "write_file", "run_tests"])
     max_steps: int = 30
-    max_tokens: int = 4096
+    max_tokens: int = 16000
+    effort: str | None = None  # "low" | "medium" | "high" ...; None = the model's default
     timeout_s: int = 600
 
 
@@ -44,7 +48,9 @@ class RunResult(BaseModel):
     repo_path: Path
     stop_reason: StopReason
     steps: int = 0
-    input_tokens: int = 0
+    input_tokens: int = 0  # uncached input, full price
+    cache_read_tokens: int = 0  # input served from the prompt cache, ~0.1x price
+    cache_write_tokens: int = 0  # input written to the cache, ~1.25x price
     output_tokens: int = 0
     wall_time_s: float = 0.0
     summary: str = ""

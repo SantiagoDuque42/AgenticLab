@@ -16,7 +16,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-TASKS_DIR = Path(__file__).resolve().parents[3] / "tasks"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+TASKS_DIR = REPO_ROOT / "tasks"
+RUNS_DIR = REPO_ROOT / "runs"
 
 
 class Task(BaseModel):

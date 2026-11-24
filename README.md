@@ -12,8 +12,11 @@ uv sync
 cp .env.example .env              # add your ANTHROPIC_API_KEY and model names
 uv run pytest -q                  # harness self-tests
 uv run miniagent tasks            # list benchmark tasks
-uv run miniagent run fix-off-by-one   # needs the agent loop (milestone 1)
+uv run --env-file .env miniagent run fix-off-by-one   # live run, costs a few cents
 ```
+
+How the loop works and why each piece is built the way it is:
+[docs/milestone-1-walkthrough.md](docs/milestone-1-walkthrough.md).
 
 ## Layout
 
@@ -21,7 +24,7 @@ uv run miniagent run fix-off-by-one   # needs the agent loop (milestone 1)
 src/miniagent/
   agent/
     types.py     # AgentConfig, RunResult: the seams the orchestrator reuses
-    loop.py      # the agent loop (milestone 1, written by hand)
+    loop.py      # the agent loop: model call, tool calls, repeat
     tools.py     # tool schemas + implementations
   harness/
     tasks.py     # load tasks, copy a fresh repo per run
