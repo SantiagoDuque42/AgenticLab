@@ -6,6 +6,7 @@ A task is a directory under `tasks/`:
       task.yaml       # prompt, limits, tags
       repo/           # starting code, copied fresh for every run
       hidden_tests/   # copied in only after the agent finishes
+      solution/       # reference fix, overlaid on repo/ by the self-tests only
 """
 
 from __future__ import annotations
@@ -36,6 +37,10 @@ class Task(BaseModel):
     @property
     def hidden_tests_dir(self) -> Path:
         return self.root / "hidden_tests"
+
+    @property
+    def solution_dir(self) -> Path:
+        return self.root / "solution"
 
 
 def load_task(task_dir: Path) -> Task:

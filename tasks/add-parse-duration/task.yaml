@@ -1,0 +1,9 @@
+prompt: |
+  Implement `parse_duration` in src/durations.py. It takes strings like "45s",
+  "2h", "1h30m" or "1h2m3s" (hours, minutes, seconds, in that order, each part
+  optional but at least one present) and returns the total number of seconds as
+  an int. Surrounding whitespace is allowed. Anything else, including an empty
+  string, "1x", "30m1h" or "-5s", must raise ValueError. Add tests for it.
+max_steps: 20
+timeout_s: 300
+tags: [one-file, feature]

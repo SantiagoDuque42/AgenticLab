@@ -13,10 +13,14 @@ cp .env.example .env              # add your ANTHROPIC_API_KEY and model names
 uv run pytest -q                  # harness self-tests
 uv run miniagent tasks            # list benchmark tasks
 uv run --env-file .env miniagent run fix-off-by-one   # live run, costs a few cents
+
+# Your own repo: the agent works in a git worktree (or a copy), never the original
+uv run --env-file .env miniagent run-repo ~/code/myproject "Fix the failing test in tests/test_api.py"
 ```
 
 How the loop works and why each piece is built the way it is:
-[docs/milestone-1-walkthrough.md](docs/milestone-1-walkthrough.md).
+[docs/milestone-1-walkthrough.md](docs/milestone-1-walkthrough.md), then
+[docs/stage-2-walkthrough.md](docs/stage-2-walkthrough.md).
 
 ## Layout
 
@@ -29,11 +33,13 @@ src/miniagent/
   harness/
     tasks.py     # load tasks, copy a fresh repo per run
     grade.py     # add hidden tests to the final repo and run pytest
-  cli.py         # `miniagent tasks | run | grade`
+  workspace.py   # git worktree / copy workspaces for run-repo
+  cli.py         # `miniagent tasks | run | run-repo | grade`
 tasks/<id>/
   task.yaml      # prompt, limits, tags
   repo/          # starting code
   hidden_tests/  # never shown to the agent
+  solution/      # reference fix, proves the task is passable
 runs/            # transcripts and results (gitignored)
 ```
 

@@ -45,7 +45,6 @@ def run_agent(
     A pure function of its inputs: no globals, no working-directory changes. That is
     what lets the orchestrator later run many of these in parallel.
     """
-    client = client or anthropic.Anthropic()
     tools = tool_schemas(config.tools)
     messages: list[dict[str, Any]] = [{"role": "user", "content": task_prompt}]
     result = RunResult(
@@ -59,6 +58,8 @@ def run_agent(
     transcript.write({"event": "start", "task_id": task_id, "config": config.model_dump()})
 
     try:
+        # Created inside the try: a missing API key surfaces as a clean ERROR result.
+        client = client or anthropic.Anthropic()
         for step in range(1, config.max_steps + 1):
             if time.monotonic() - started > config.timeout_s:
                 result.stop_reason = StopReason.TIMEOUT
@@ -71,7 +72,7 @@ def run_agent(
             # Append the assistant turn exactly as returned (all blocks, not just text).
             messages.append({"role": "assistant", "content": response.content})
 
-            tool_results = _run_tool_calls(response.content, repo_path)
+            tool_results = _run_tool_calls(response.content, repo_path, config)
             transcript.write(
                 {
                     "event": "step",
@@ -98,7 +99,7 @@ def run_agent(
                 result.stop_reason = StopReason.ERROR
                 result.summary = f"model stopped with stop_reason={response.stop_reason}"
             break
-    except anthropic.APIError as exc:
+    except anthropic.AnthropicError as exc:
         result.stop_reason = StopReason.ERROR
         result.summary = f"{type(exc).__name__}: {exc}"
     finally:
@@ -128,12 +129,20 @@ def _request(
     return request
 
 
-def _run_tool_calls(content: list[Any], repo_path: Path) -> list[dict[str, Any]]:
+def _run_tool_calls(
+    content: list[Any], repo_path: Path, config: AgentConfig
+) -> list[dict[str, Any]]:
     results = []
     for block in content:
         if block.type != "tool_use":
             continue
-        output = execute_tool(block.name, block.input, repo_path)
+        output = execute_tool(
+            block.name,
+            block.input,
+            repo_path,
+            test_command=config.test_command,
+            test_timeout_s=config.test_timeout_s,
+        )
         results.append(
             {
                 "type": "tool_result",
