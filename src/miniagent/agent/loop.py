@@ -3,7 +3,8 @@
 This is a hand-rolled loop on the raw Messages API on purpose. The SDK's tool runner
 would hide exactly the parts this project exists to learn: when to stop, what goes
 back into the conversation, and what each step costs.
-Read docs/milestone-1-walkthrough.md alongside this file.
+Read docs/milestone-1-walkthrough.md alongside this file, and
+docs/stage-3-walkthrough.md for how the conversation is kept small (ContextManager).
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ from typing import Any, Protocol
 
 import anthropic
 
-from miniagent.agent.tools import CommandRunner, execute_tool, tool_schemas
+from miniagent.agent.context import ContextManager
+from miniagent.agent.pricing import cost_usd
+from miniagent.agent.tools import CommandRunner, ToolOutput, execute_tool, tool_schemas
 from miniagent.agent.types import AgentConfig, RunResult, StopReason
 
 
@@ -49,8 +52,14 @@ def run_agent(
     With `sandbox`, shell commands and tests run there (a container with `repo_path`
     mounted) instead of on the host. The caller starts and stops it.
     """
-    tools = tool_schemas(config.tools)
-    messages: list[dict[str, Any]] = [{"role": "user", "content": task_prompt}]
+    ctx = ContextManager(
+        task_prompt,
+        config.context,
+        model=config.model,
+        system_prompt=config.system_prompt,
+        tools=tool_schemas(config.tools),
+        repo_path=repo_path,
+    )
     result = RunResult(
         task_id=task_id,
         repo_path=repo_path,
@@ -68,15 +77,30 @@ def run_agent(
             if time.monotonic() - started > config.timeout_s:
                 result.stop_reason = StopReason.TIMEOUT
                 break
+            if _over_budget(result, config):
+                result.stop_reason = StopReason.BUDGET
+                result.summary = f"stopped at the cost cap: ${result.cost_usd:.4f}"
+                break
 
-            response = client.messages.create(**_request(config, tools, messages))
+            # Context management runs before every request: it may clear old tool
+            # output or compact the history (which itself costs a model call).
+            for event in ctx.prepare(client):
+                result.clears += event.kind == "clear"
+                result.compactions += event.kind == "compact"
+                transcript.write({"event": "context", "step": step, **vars(event)})
+            for usage in ctx.extra_usage:
+                _add_usage(result, usage, config.model)
+            ctx.extra_usage.clear()
+            estimated = ctx.estimated_tokens
+
+            response = _create(client, _request(config, ctx))
             result.steps = step
-            _add_usage(result, response.usage)
+            _add_usage(result, response.usage, config.model)
 
             # Append the assistant turn exactly as returned (all blocks, not just text).
-            messages.append({"role": "assistant", "content": response.content})
+            ctx.record_response(response.content, response.usage)
 
-            tool_results = _run_tool_calls(response.content, repo_path, config, sandbox)
+            tool_results = _run_tool_calls(response.content, repo_path, config, sandbox, ctx)
             transcript.write(
                 {
                     "event": "step",
@@ -85,6 +109,11 @@ def run_agent(
                     "content": [b.model_dump() for b in response.content],
                     "tool_results": tool_results,
                     "usage": response.usage.model_dump(),
+                    # Estimated size before sending vs. what the API measured, to see
+                    # how good the estimate is (see the walkthrough).
+                    "context_estimate": estimated,
+                    "context_actual": _request_size(response.usage),
+                    "server_edits": _server_edits(response),
                 }
             )
             if on_step:
@@ -92,7 +121,7 @@ def run_agent(
 
             if response.stop_reason == "tool_use":
                 # All results from one assistant turn go back in ONE user message.
-                messages.append({"role": "user", "content": tool_results})
+                ctx.add_tool_results(tool_results)
                 continue
 
             if response.stop_reason == "end_turn":
@@ -107,30 +136,62 @@ def run_agent(
         result.stop_reason = StopReason.ERROR
         result.summary = f"{type(exc).__name__}: {exc}"
     finally:
+        result.peak_context_tokens = ctx.peak_tokens
         result.wall_time_s = round(time.monotonic() - started, 2)
+        if ctx.notes:
+            transcript.write({"event": "notes", "notes": ctx.notes})
         transcript.write({"event": "end", "result": result.model_dump(mode="json")})
 
     return result
 
 
-def _request(
-    config: AgentConfig, tools: list[dict[str, Any]], messages: list[dict[str, Any]]
-) -> dict[str, Any]:
+def _request(config: AgentConfig, ctx: ContextManager) -> dict[str, Any]:
     """Build the Messages API arguments for one step."""
     request: dict[str, Any] = {
         "model": config.model,
         "max_tokens": config.max_tokens,
-        "system": config.system_prompt,
-        "tools": tools,
-        "messages": messages,
+        "system": ctx.system,
+        "tools": ctx.tools,
+        "messages": ctx.wire(),
         # Automatic prompt caching: the API caches the longest stable prefix
         # (tools, system, earlier messages). Every step resends the whole history,
         # so from step 2 on most input tokens are cache reads at ~0.1x price.
         "cache_control": {"type": "ephemeral"},
+        **ctx.request_params(),
     }
     if config.effort:
         request["output_config"] = {"effort": config.effort}
     return request
+
+
+def _create(client: MessagesClient, request: dict[str, Any]) -> Any:
+    # Beta features (server-side context editing) live on the beta endpoint.
+    if "betas" in request:
+        return client.beta.messages.create(**request)
+    return client.messages.create(**request)
+
+
+def _request_size(usage: Any) -> int:
+    return (
+        usage.input_tokens
+        + (usage.cache_read_input_tokens or 0)
+        + (usage.cache_creation_input_tokens or 0)
+    )
+
+
+def _server_edits(response: Any) -> list[dict[str, Any]]:
+    managed = getattr(response, "context_management", None)
+    if not managed:
+        return []
+    return [edit.model_dump() for edit in managed.applied_edits]
+
+
+def _over_budget(result: RunResult, config: AgentConfig) -> bool:
+    return (
+        config.max_cost_usd is not None
+        and result.cost_usd is not None
+        and result.cost_usd >= config.max_cost_usd
+    )
 
 
 def _run_tool_calls(
@@ -138,20 +199,26 @@ def _run_tool_calls(
     repo_path: Path,
     config: AgentConfig,
     sandbox: CommandRunner | None = None,
+    ctx: ContextManager | None = None,
 ) -> list[dict[str, Any]]:
     results = []
     for block in content:
         if block.type != "tool_use":
             continue
-        output = execute_tool(
-            block.name,
-            block.input,
-            repo_path,
-            test_command=config.test_command,
-            test_timeout_s=config.test_timeout_s,
-            share_python_env=config.share_python_env,
-            sandbox=sandbox,
-        )
+        if block.name == "notes" and ctx is not None and ctx.config.notes:
+            # Notes are harness state, not a file in the repo: they live in the
+            # context manager so compaction can carry them over.
+            output = ToolOutput(*ctx.run_notes(block.input))
+        else:
+            output = execute_tool(
+                block.name,
+                block.input,
+                repo_path,
+                test_command=config.test_command,
+                test_timeout_s=config.test_timeout_s,
+                share_python_env=config.share_python_env,
+                sandbox=sandbox,
+            )
         results.append(
             {
                 "type": "tool_result",
@@ -163,13 +230,20 @@ def _run_tool_calls(
     return results
 
 
-def _add_usage(result: RunResult, usage: Any) -> None:
+def _add_usage(result: RunResult, usage: Any, model: str) -> None:
     # Cached tokens are reported separately from `input_tokens`; count all of them
-    # so cost reporting later can price each kind correctly.
+    # so each kind is priced correctly.
     result.input_tokens += usage.input_tokens
     result.cache_read_tokens += usage.cache_read_input_tokens or 0
     result.cache_write_tokens += usage.cache_creation_input_tokens or 0
     result.output_tokens += usage.output_tokens
+    result.cost_usd = cost_usd(
+        model,
+        result.input_tokens,
+        result.cache_read_tokens,
+        result.cache_write_tokens,
+        result.output_tokens,
+    )
 
 
 def _text_of(content: list[Any]) -> str:
