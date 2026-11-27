@@ -15,9 +15,10 @@ from rich.console import Console
 from rich.table import Table
 
 from miniagent.agent import AgentConfig
-from miniagent.agent.context import ContextConfig
+from miniagent.agent.context import ContextConfig, ContextEvent
 from miniagent.agent.loop import run_agent
 from miniagent.agent.tools import TOOL_SCHEMAS
+from miniagent.agent.types import StopReason
 from miniagent.harness.grade import grade
 from miniagent.harness.tasks import RUNS_DIR, TASKS_DIR, load_task, load_tasks, prepare_workspace
 from miniagent.sandbox import DockerSandbox, SandboxError, docker_available
@@ -180,8 +181,14 @@ def run(
             config,
             transcript_path=transcript,
             on_step=_print_step,
+            on_context=_print_context,
             sandbox=box,
         )
+    if result.stop_reason == StopReason.INTERRUPTED:
+        _print_result(result, transcript)
+        console.print(f"workspace: {repo}")
+        console.print("[yellow]not graded: the run was interrupted[/yellow]")
+        raise typer.Exit(130)
     # Grading runs on the host, after the container is gone: the held-out data in
     # tasks/_shared was never mounted, so the agent could not have read it.
     graded = grade(task, repo)
@@ -259,6 +266,7 @@ def run_repo(
             config,
             transcript_path=transcript,
             on_step=_print_step,
+            on_context=_print_context,
             sandbox=box,
         )
 
@@ -317,8 +325,36 @@ def _print_result(result: Any, transcript: Path) -> None:
         console.print(f"summary: {result.summary}")
 
 
+def _print_context(step: int, event: ContextEvent) -> None:
+    """One visible line per clear or compaction, so you can watch them happen."""
+    sizes = f"{event.tokens_before:,} -> {event.tokens_after:,} tokens"
+    if event.kind == "clear":
+        n = event.detail.get("cleared_results", 0)
+        console.print(f"[magenta]context:[/magenta] cleared {n} old tool outputs, {sizes}")
+    elif event.kind == "compact":
+        chars = len(event.detail.get("summary", ""))
+        console.print(
+            f"[magenta]context:[/magenta] compacted the history into a {chars:,}-character "
+            f"summary, {sizes}"
+        )
+    else:
+        console.print(f"[red]context: {event.kind}[/red] {event.detail.get('error', '')}")
+
+
 def _print_step(step: int, response: Any, tool_results: list[dict[str, Any]]) -> None:
-    console.rule(f"step {step}")
+    usage = response.usage
+    size = (
+        usage.input_tokens
+        + (usage.cache_read_input_tokens or 0)
+        + (usage.cache_creation_input_tokens or 0)
+    )
+    console.rule(f"step {step} · context {size:,} tokens")
+    managed = getattr(response, "context_management", None)
+    for edit in getattr(managed, "applied_edits", None) or []:
+        console.print(
+            f"[magenta]context (server):[/magenta] cleared {edit.cleared_tool_uses} old tool "
+            f"outputs, {edit.cleared_input_tokens:,} tokens"
+        )
     results = iter(tool_results)
     for block in response.content:
         if block.type == "text" and block.text.strip():
