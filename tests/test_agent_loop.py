@@ -183,3 +183,36 @@ def test_scripted_run_uses_search_and_edit_on_multi_file_task(tmp_path: Path):
     # The grep result the model saw pointed it at the right file.
     grep_result = client.messages.requests[2]["messages"][-1]["content"][0]["content"]
     assert grep_result.startswith("src/discounts.py:1:")
+
+
+class RecordingSandbox:
+    """Stands in for DockerSandbox: records what would have run in the container."""
+
+    def __init__(self) -> None:
+        self.commands: list[str | list[str]] = []
+
+    def exec(self, command, timeout_s):
+        from miniagent.agent.tools import ToolOutput
+
+        self.commands.append(command)
+        return ToolOutput("exit code: 0\nran in sandbox")
+
+
+def test_bash_and_tests_go_to_the_sandbox(tmp_path: Path):
+    _, repo = _toy_repo(tmp_path)
+    sandbox = RecordingSandbox()
+    client = FakeClient(
+        [
+            _tool_call("t1", "bash", {"command": "echo hi", "timeout_s": None}),
+            _tool_call("t2", "run_tests", {}),
+            _message([{"type": "text", "text": "done"}], "end_turn"),
+        ]
+    )
+    config = AgentConfig(model="fake")
+    result = run_agent("toy", "go", repo, config, client=client, sandbox=sandbox)
+    assert result.stop_reason == StopReason.FINISHED
+    assert sandbox.commands[0] == "echo hi"
+    assert "pytest" in sandbox.commands[1]
+    # The model saw the sandbox's output, not a host run.
+    tool_result = client.messages.requests[1]["messages"][-1]["content"][0]
+    assert "ran in sandbox" in tool_result["content"]

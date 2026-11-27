@@ -10,6 +10,11 @@ that beats a single agent.
 Runs on Linux, macOS or WSL. On Windows, use WSL (`wsl --install -d Ubuntu`) and reach
 your repos at `/mnt/c/...`; the CLI refuses to start on native Windows.
 
+The agent's shell commands and tests run in a Docker container that only sees the
+run's workspace (no network for benchmark tasks, no access to your home folder or
+the held-out test data). It needs Docker running; the image builds itself on first
+use. `--sandbox none` runs without it.
+
 ```bash
 uv sync
 cp .env.example .env              # add your ANTHROPIC_API_KEY and model names
@@ -26,7 +31,8 @@ How the loop works and why each piece is built the way it is:
 [docs/milestone-1-walkthrough.md](docs/milestone-1-walkthrough.md), then
 [docs/stage-2-walkthrough.md](docs/stage-2-walkthrough.md). The real-world ML tasks
 (C-MAPSS turbofan RUL: hit a metric target, debug a failed nightly run) are explained
-in [docs/mlops-tasks-walkthrough.md](docs/mlops-tasks-walkthrough.md).
+in [docs/mlops-tasks-walkthrough.md](docs/mlops-tasks-walkthrough.md), and the sandbox
+in [docs/sandbox-walkthrough.md](docs/sandbox-walkthrough.md).
 
 ## Layout
 
@@ -41,7 +47,9 @@ src/miniagent/
     grade.py     # add hidden tests to the final repo and run pytest
     metrics.py   # record_metric(): numbers like test RMSE, reported by hidden tests
   workspace.py   # run-repo workspaces: copy + baseline, changes.patch
+  sandbox.py     # Docker sandbox: one container per run, only the workspace mounted
   cli.py         # `miniagent tasks | run | run-repo | grade`
+docker/Dockerfile  # the sandbox image (python, numpy, pytest, uv, read-only git)
 tasks/<id>/
   task.yaml      # prompt, limits, tags
   repo/          # starting code

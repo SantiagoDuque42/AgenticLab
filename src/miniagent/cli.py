@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -17,6 +19,7 @@ from miniagent.agent.loop import run_agent
 from miniagent.agent.tools import TOOL_SCHEMAS
 from miniagent.harness.grade import grade
 from miniagent.harness.tasks import RUNS_DIR, TASKS_DIR, load_task, load_tasks, prepare_workspace
+from miniagent.sandbox import DockerSandbox, SandboxError, docker_available
 from miniagent.workspace import create_workspace, default_test_command, write_patch
 
 app = typer.Typer(no_args_is_help=True)
@@ -68,6 +71,41 @@ _EFFORT = typer.Option(None, help="low | medium | high; default: the model's.")
 _TOOLS = typer.Option(
     None, help="Comma-separated tool names to enable, e.g. 'read_file,edit_file,bash'."
 )
+_SANDBOX = typer.Option(
+    "docker",
+    help="Where shell commands and tests run: 'docker' (a container that only sees the "
+    "workspace) or 'none' (directly on this machine, with the guard rails only).",
+)
+
+
+def _check_sandbox(sandbox: str) -> None:
+    if sandbox not in ("docker", "none"):
+        raise typer.BadParameter("--sandbox must be 'docker' or 'none'")
+    if sandbox == "docker" and not docker_available():
+        raise typer.BadParameter(
+            "Docker isn't reachable (`docker info` failed). Start Docker, or run with "
+            "--sandbox none to use the guard rails only."
+        )
+
+
+@contextlib.contextmanager
+def _sandbox_for(kind: str, workspace: Path, network: bool) -> Iterator[DockerSandbox | None]:
+    if kind == "none":
+        console.print("[yellow]sandbox: none, commands run directly on this machine[/yellow]")
+        yield None
+        return
+    try:
+        box = DockerSandbox(workspace, network=network).start()
+    except SandboxError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        f"sandbox: docker ({box.name}), sees only the workspace, "
+        f"network {'on' if network else 'off'}"
+    )
+    try:
+        yield box
+    finally:
+        box.stop()
 
 
 @app.command()
@@ -77,9 +115,11 @@ def run(
     effort: str = _EFFORT,
     tools: str = _TOOLS,
     keep: bool = typer.Option(False, help="Print the workspace path to inspect it."),
+    sandbox: str = _SANDBOX,
 ) -> None:
     """Run the agent on one benchmark task in a fresh copy of its repo, then grade it."""
     task = load_task(TASKS_DIR / task_id)
+    _check_sandbox(sandbox)
     workdir = Path(tempfile.mkdtemp(prefix="miniagent-"))
     repo = prepare_workspace(task, workdir)
     config = _config(
@@ -92,9 +132,20 @@ def run(
     )
     transcript = _transcript_path(task.id)
 
-    result = run_agent(
-        task.id, task.prompt, repo, config, transcript_path=transcript, on_step=_print_step
-    )
+    # Benchmark runs are offline: the task has everything it needs, and no network
+    # means nothing to leak to and nothing to download mid-run.
+    with _sandbox_for(sandbox, repo, network=False) as box:
+        result = run_agent(
+            task.id,
+            task.prompt,
+            repo,
+            config,
+            transcript_path=transcript,
+            on_step=_print_step,
+            sandbox=box,
+        )
+    # Grading runs on the host, after the container is gone: the held-out data in
+    # tasks/_shared was never mounted, so the agent could not have read it.
     graded = grade(task, repo)
 
     _print_result(result, transcript)
@@ -121,11 +172,18 @@ def run_repo(
     max_steps: int = typer.Option(40, help="Hard cap on model calls."),
     timeout_s: int = typer.Option(1200, help="Hard cap on wall time for the whole run."),
     test_timeout_s: int = typer.Option(300, help="Timeout for one test run."),
+    sandbox: str = _SANDBOX,
+    network: bool = typer.Option(
+        True,
+        help="Network inside the sandbox. On by default so `uv run` can install your "
+        "repo's dependencies; --no-network if they're already vendored.",
+    ),
 ) -> None:
     """Run the agent on a copy of your repository. Your repo and its git are never touched.
 
     You get a changes.patch to review, and apply yourself if you want it. No grading."""
     # Validate everything before creating the workspace, so a typo leaves nothing behind.
+    _check_sandbox(sandbox)
     config = _config(
         model,
         effort,
@@ -141,18 +199,22 @@ def run_repo(
     console.print(f"[bold]workspace[/bold] (a copy): {workspace.path}")
     console.print(f"your repo is not modified, and its git gets nothing: {workspace.source}")
 
-    config.test_command = test_command or default_test_command(workspace.path)
+    config.test_command = test_command or default_test_command(
+        workspace.path, in_sandbox=sandbox == "docker"
+    )
     console.print(f"tests run with: {config.test_command}")
     transcript = _transcript_path(f"repo-{workspace.source.name}")
 
-    result = run_agent(
-        workspace.source.name,
-        prompt,
-        workspace.path,
-        config,
-        transcript_path=transcript,
-        on_step=_print_step,
-    )
+    with _sandbox_for(sandbox, workspace.path, network=network) as box:
+        result = run_agent(
+            workspace.source.name,
+            prompt,
+            workspace.path,
+            config,
+            transcript_path=transcript,
+            on_step=_print_step,
+            sandbox=box,
+        )
 
     _print_result(result, transcript)
     console.rule("changes")
