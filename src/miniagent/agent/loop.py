@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 import anthropic
 
-from miniagent.agent.tools import execute_tool, tool_schemas
+from miniagent.agent.tools import CommandRunner, execute_tool, tool_schemas
 from miniagent.agent.types import AgentConfig, RunResult, StopReason
 
 
@@ -39,11 +39,15 @@ def run_agent(
     client: MessagesClient | None = None,
     transcript_path: Path | None = None,
     on_step: StepCallback | None = None,
+    sandbox: CommandRunner | None = None,
 ) -> RunResult:
     """Run the agent on one task inside `repo_path` and return what happened.
 
     A pure function of its inputs: no globals, no working-directory changes. That is
     what lets the orchestrator later run many of these in parallel.
+
+    With `sandbox`, shell commands and tests run there (a container with `repo_path`
+    mounted) instead of on the host. The caller starts and stops it.
     """
     tools = tool_schemas(config.tools)
     messages: list[dict[str, Any]] = [{"role": "user", "content": task_prompt}]
@@ -72,7 +76,7 @@ def run_agent(
             # Append the assistant turn exactly as returned (all blocks, not just text).
             messages.append({"role": "assistant", "content": response.content})
 
-            tool_results = _run_tool_calls(response.content, repo_path, config)
+            tool_results = _run_tool_calls(response.content, repo_path, config, sandbox)
             transcript.write(
                 {
                     "event": "step",
@@ -130,7 +134,10 @@ def _request(
 
 
 def _run_tool_calls(
-    content: list[Any], repo_path: Path, config: AgentConfig
+    content: list[Any],
+    repo_path: Path,
+    config: AgentConfig,
+    sandbox: CommandRunner | None = None,
 ) -> list[dict[str, Any]]:
     results = []
     for block in content:
@@ -143,6 +150,7 @@ def _run_tool_calls(
             test_command=config.test_command,
             test_timeout_s=config.test_timeout_s,
             share_python_env=config.share_python_env,
+            sandbox=sandbox,
         )
         results.append(
             {

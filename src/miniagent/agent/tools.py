@@ -31,7 +31,7 @@ import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 MAX_OUTPUT_CHARS = 10_000
 MAX_LISTING = 200  # max entries from list_dir / glob, max matching lines from grep
@@ -89,6 +89,12 @@ SECRET_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "AWS_", "GITHUB_TOKEN", "GH_TOKE
 class ToolOutput:
     text: str
     is_error: bool = False
+
+
+class CommandRunner(Protocol):
+    """Where shell commands run instead of the host: miniagent.sandbox.DockerSandbox."""
+
+    def exec(self, command: str | list[str], timeout_s: int) -> ToolOutput: ...
 
 
 # --- Schemas -------------------------------------------------------------------------
@@ -404,7 +410,8 @@ def _git_shim_dir() -> str | None:
     The command deny-list only sees the command line the model wrote. A script the agent
     writes and runs, `sh -c`, or a Python subprocess would slip past it. Putting this
     shim first on PATH catches every `git` found through PATH, whoever calls it. It does
-    not stop someone calling the real binary by absolute path; Stage 4's sandbox does.
+    not stop someone calling the real binary by absolute path; the Docker sandbox does
+    (miniagent/sandbox.py), since only the workspace copy is mounted there.
     """
     real_git = shutil.which("git")
     if not real_git or os.name != "posix":
@@ -497,7 +504,12 @@ def blocked_reason(command: str) -> str | None:
 
 
 def bash(
-    repo_path: Path, command: str, timeout_s: int | None, *, share_python_env: bool = False
+    repo_path: Path,
+    command: str,
+    timeout_s: int | None,
+    *,
+    share_python_env: bool = False,
+    sandbox: CommandRunner | None = None,
 ) -> ToolOutput:
     reason = blocked_reason(command)
     if reason:
@@ -508,15 +520,23 @@ def bash(
         )
     timeout = min(max(timeout_s or BASH_DEFAULT_TIMEOUT_S, 1), BASH_MAX_TIMEOUT_S)
     # A non-zero exit code is a result, not a tool error: the command ran.
+    if sandbox is not None:
+        return sandbox.exec(command, timeout)
     return _run(command, repo_path, timeout, shell=True, share_python_env=share_python_env)
 
 
 def run_tests(
-    repo_path: Path, test_command: str | None = None, timeout_s: int = TEST_TIMEOUT_S
+    repo_path: Path,
+    test_command: str | None = None,
+    timeout_s: int = TEST_TIMEOUT_S,
+    sandbox: CommandRunner | None = None,
 ) -> ToolOutput:
     """Run the test suite. With no `test_command`, use pytest under miniagent's own
     interpreter (right for benchmark tasks, which share miniagent's environment).
-    For a real repo, pass that repo's own command, e.g. 'uv run pytest'."""
+    For a real repo, pass that repo's own command, e.g. 'uv run pytest'.
+    In a sandbox, the same commands run inside the container."""
+    if sandbox is not None:
+        return sandbox.exec(test_command or "python -m pytest -q -p no:cacheprovider", timeout_s)
     if test_command:
         return _run(test_command, repo_path, timeout_s, shell=True)
     cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
@@ -543,6 +563,7 @@ def execute_tool(
     test_command: str | None = None,
     test_timeout_s: int = TEST_TIMEOUT_S,
     share_python_env: bool = False,
+    sandbox: CommandRunner | None = None,
 ) -> ToolOutput:
     """Run one tool call. Never raises: every failure becomes an error ToolOutput.
 
@@ -555,9 +576,9 @@ def execute_tool(
         return ToolOutput(f"Unknown tool: {name}", is_error=True)
     try:
         if name == "run_tests":
-            return run_tests(repo_path, test_command, test_timeout_s)
+            return run_tests(repo_path, test_command, test_timeout_s, sandbox)
         if name == "bash":
-            return bash(repo_path, **tool_input, share_python_env=share_python_env)
+            return bash(repo_path, **tool_input, share_python_env=share_python_env, sandbox=sandbox)
         return impl(repo_path, **tool_input)
     except (ValueError, OSError, UnicodeDecodeError, TypeError, subprocess.SubprocessError) as exc:
         return ToolOutput(f"{type(exc).__name__}: {exc}", is_error=True)

@@ -238,3 +238,14 @@ def test_bash_python_env_is_the_repos_unless_shared(repo: Path, monkeypatch):
         share_python_env=True,
     )
     assert os.path.realpath(tools.sys.prefix) in os.path.realpath(own_python.text.split()[-1])
+
+
+def test_file_tools_refuse_symlinks_out_of_the_repo(repo: Path, tmp_path_factory):
+    """The agent can make a symlink with bash; read_file must not follow it outside."""
+    outside = tmp_path_factory.mktemp("outside") / "secret.txt"
+    outside.write_text("do not read")
+    (repo / "link.txt").symlink_to(outside)
+    out = execute_tool(
+        "read_file", {"path": "link.txt", "start_line": None, "end_line": None}, repo
+    )
+    assert out.is_error and "do not read" not in out.text

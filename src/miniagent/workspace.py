@@ -110,8 +110,9 @@ def write_patch(workspace: Workspace) -> str:
     return "\n".join(summary) or "(no changes)"
 
 
-def default_test_command(repo: Path) -> str:
-    """The repo's own way of running its tests, in its own environment."""
-    if (repo / "pyproject.toml").exists() and shutil.which("uv"):
+def default_test_command(repo: Path, *, in_sandbox: bool = False) -> str:
+    """The repo's own way of running its tests, in its own environment.
+    The sandbox image always has uv; on the host, only if it is installed."""
+    if (repo / "pyproject.toml").exists() and (in_sandbox or shutil.which("uv")):
         return "uv run pytest -q"
     return "python -m pytest -q"
