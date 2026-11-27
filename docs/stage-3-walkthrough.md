@@ -245,14 +245,30 @@ a few cents.
 A model not in the table gets `cost: n/a`, so a new model never shows a wrong price.
 Update the table when prices change.
 
-## 11. What the transcript shows
+## 11. What the console shows
+
+Each step's header shows the size of the request it sent
+(`step 7 · context 10,432 tokens`), so you can watch the context grow toward the
+thresholds. Each clear or compaction prints its own line:
+
+```
+context: cleared 4 old tool outputs, 10,432 -> 6,120 tokens
+context: compacted the history into a 1,830-character summary, 20,511 -> 2,890 tokens
+```
+
+Server-side clears print `context (server): ...` on the step where the API applied
+them. Ctrl+C ends the run with stop reason `interrupted` and still prints the result
+block (cost, cache hit rate, peak context). A benchmark run stopped this way is not
+graded, and the workspace path is printed so you can look at what the agent did.
+
+## 12. What the transcript shows
 
 New fields per step: `context_estimate`, `context_actual`, `server_edits`. New
 events: `context` (each clear or compaction, with tokens before and after, and the
 full summary text for compactions), and `notes` at the end. The final `result` has
 `cost_usd`, `cache_hit_rate`, `peak_context_tokens`, `clears`, `compactions`.
 
-## 12. Tests
+## 13. Tests
 
 `tests/test_context.py` uses the fake client, so no API calls:
 
@@ -271,8 +287,10 @@ full summary text for compactions), and `notes` at the end. The final `result` h
 | project instructions | `AGENTS.md` lands in the system prompt |
 | exact token count | `count_tokens` result replaces the estimate |
 | pricing | known model priced, unknown model `None` |
+| context events reach the callback | the CLI's hook sees each compaction |
+| Ctrl+C | stop reason `interrupted`, with the steps and cost so far |
 
-## 13. Things to try
+## 14. Things to try
 
 These are cheap with Haiku (a few cents per run, from your earlier Haiku runs):
 

@@ -21,6 +21,7 @@ class StopReason(StrEnum):
     STEP_LIMIT = "step_limit"
     TIMEOUT = "timeout"
     BUDGET = "budget"  # max_cost_usd reached
+    INTERRUPTED = "interrupted"  # Ctrl+C
     ERROR = "error"
 
 

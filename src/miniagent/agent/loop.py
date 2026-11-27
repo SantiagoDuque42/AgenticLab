@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 import anthropic
 
-from miniagent.agent.context import ContextManager
+from miniagent.agent.context import ContextEvent, ContextManager
 from miniagent.agent.pricing import cost_usd
 from miniagent.agent.tools import CommandRunner, ToolOutput, execute_tool, tool_schemas
 from miniagent.agent.types import AgentConfig, RunResult, StopReason
@@ -31,6 +31,7 @@ class MessagesClient(Protocol):
 
 
 StepCallback = Callable[[int, Any, list[dict[str, Any]]], None]
+ContextCallback = Callable[[int, ContextEvent], None]
 
 
 def run_agent(
@@ -42,6 +43,7 @@ def run_agent(
     client: MessagesClient | None = None,
     transcript_path: Path | None = None,
     on_step: StepCallback | None = None,
+    on_context: ContextCallback | None = None,
     sandbox: CommandRunner | None = None,
 ) -> RunResult:
     """Run the agent on one task inside `repo_path` and return what happened.
@@ -88,6 +90,8 @@ def run_agent(
                 result.clears += event.kind == "clear"
                 result.compactions += event.kind == "compact"
                 transcript.write({"event": "context", "step": step, **vars(event)})
+                if on_context:
+                    on_context(step, event)
             for usage in ctx.extra_usage:
                 _add_usage(result, usage, config.model)
             ctx.extra_usage.clear()
@@ -135,6 +139,11 @@ def run_agent(
     except anthropic.AnthropicError as exc:
         result.stop_reason = StopReason.ERROR
         result.summary = f"{type(exc).__name__}: {exc}"
+    except KeyboardInterrupt:
+        # Ctrl+C is a normal way to end a run you've seen enough of. Return what it
+        # cost so far instead of a traceback; the caller still stops the sandbox.
+        result.stop_reason = StopReason.INTERRUPTED
+        result.summary = "stopped with Ctrl+C"
     finally:
         result.peak_context_tokens = ctx.peak_tokens
         result.wall_time_s = round(time.monotonic() - started, 2)

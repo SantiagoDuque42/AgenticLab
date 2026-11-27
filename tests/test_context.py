@@ -238,6 +238,41 @@ def test_cost_and_budget_stop(tmp_path: Path):
     assert 0 < result.cache_hit_rate < 1
 
 
+def test_context_events_reach_the_callback(tmp_path: Path):
+    """The CLI prints a line for each clear or compaction; this is the hook it uses."""
+    script = [
+        bash_call("t1", "echo a", input_tokens=1_000),
+        bash_call("t2", "echo b", input_tokens=150_000),
+        done("SUMMARY"),
+        done("fixed"),
+    ]
+    seen = []
+    config = AgentConfig(
+        model="claude-haiku-5-5",
+        context=ContextConfig(clear_tool_results_at=None, compact_at=100_000),
+    )
+    run_agent(
+        "t", "go", tmp_path, config, client=FakeClient(script),
+        on_context=lambda step, event: seen.append((step, event.kind)),
+    )  # fmt: skip
+    assert seen == [(3, "compact")]
+
+
+def test_ctrl_c_returns_a_result_with_the_cost_so_far(tmp_path: Path):
+    class Interrupting(FakeMessages):
+        def create(self, **request: Any) -> Message:
+            if len(self.requests) == 2:
+                raise KeyboardInterrupt
+            return super().create(**request)
+
+    client = FakeClient([])
+    client.messages = Interrupting([bash_call("t1", "echo"), bash_call("t2", "echo")])
+    config = AgentConfig(model="claude-haiku-5-5", context=OFF)
+    result = run_agent("t", "go", tmp_path, config, client=client)
+    assert result.stop_reason == StopReason.INTERRUPTED
+    assert result.steps == 2 and result.cost_usd and result.cost_usd > 0
+
+
 def test_notes_tool_is_offered_only_when_enabled(tmp_path: Path):
     off = manager(ContextConfig())
     on = manager(ContextConfig(notes=True))
