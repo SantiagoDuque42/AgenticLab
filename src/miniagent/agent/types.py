@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from miniagent.agent.context import ContextConfig
 from miniagent.agent.tools import DEFAULT_TOOLS
 
 
@@ -19,6 +20,7 @@ class StopReason(StrEnum):
     FINISHED = "finished"  # the model called `finish` or stopped asking for tools
     STEP_LIMIT = "step_limit"
     TIMEOUT = "timeout"
+    BUDGET = "budget"  # max_cost_usd reached
     ERROR = "error"
 
 
@@ -49,6 +51,10 @@ class AgentConfig(BaseModel):
     # (where the task's libraries, e.g. numpy, are installed). False for real repos,
     # whose commands must use the repo's own environment.
     share_python_env: bool = False
+    # How the conversation is kept small on long runs (see agent/context.py).
+    context: ContextConfig = Field(default_factory=ContextConfig)
+    # Stop before the next model call once the run has cost this much. None = no cap.
+    max_cost_usd: float | None = None
 
 
 class RunResult(BaseModel):
@@ -63,6 +69,16 @@ class RunResult(BaseModel):
     cache_read_tokens: int = 0  # input served from the prompt cache, ~0.1x price
     cache_write_tokens: int = 0  # input written to the cache, ~1.25x price
     output_tokens: int = 0
+    cost_usd: float | None = None  # None when the model isn't in the price table
+    peak_context_tokens: int = 0  # largest request the run sent
+    clears: int = 0  # times old tool results were cleared
+    compactions: int = 0  # times the history was summarized
     wall_time_s: float = 0.0
     summary: str = ""
     transcript_path: Path | None = None
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Share of input tokens served from the prompt cache."""
+        total = self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+        return self.cache_read_tokens / total if total else 0.0

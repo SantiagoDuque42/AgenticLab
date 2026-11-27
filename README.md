@@ -59,6 +59,15 @@ tasks/_shared/   # datasets several tasks use (C-MAPSS FD001), listed under `sha
 runs/            # transcripts and results (gitignored)
 ```
 
+## Context management and cost
+
+Long runs stay inside a token budget: old tool outputs are cleared at 60K tokens of
+context and the history is summarized at 120K. Every run prints its cost and cache hit
+rate. Useful flags (on `run` and `run-repo`): `--clear-at`, `--compact-at`,
+`--server-clear-at`, `--notes`, `--count-tokens api`, `--max-cost 0.25`. If the target
+repo has an `AGENTS.md` or `CLAUDE.md`, it is added to the system prompt. See
+[docs/stage-3-walkthrough.md](docs/stage-3-walkthrough.md).
+
 ## Milestones
 
 1. Bare loop with `read_file`, `write_file`, `run_tests` that passes `fix-off-by-one`

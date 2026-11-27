@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from miniagent.agent import AgentConfig
+from miniagent.agent.context import ContextConfig
 from miniagent.agent.loop import run_agent
 from miniagent.agent.tools import TOOL_SCHEMAS
 from miniagent.harness.grade import grade
@@ -78,6 +79,34 @@ _SANDBOX = typer.Option(
 )
 
 
+# Context management (docs/stage-3-walkthrough.md). Thresholds are tokens of context;
+# 0 turns a strategy off.
+_CLEAR_AT = typer.Option(60_000, help="Clear old tool outputs above this many tokens.")
+_SERVER_CLEAR_AT = typer.Option(
+    0, help="Let the API clear old tool outputs (context editing beta) above this many tokens."
+)
+_COMPACT_AT = typer.Option(120_000, help="Summarize the history above this many tokens.")
+_NOTES = typer.Option(False, help="Give the agent a notes tool that survives compaction.")
+_COUNT_TOKENS = typer.Option(
+    "estimate", help="'estimate' (free, from usage) or 'api' (exact count before each call)."
+)
+_MAX_COST = typer.Option(None, help="Stop the run once it has cost this many USD.")
+
+
+def _context(
+    clear_at: int, server_clear_at: int, compact_at: int, notes: bool, count_tokens: str
+) -> ContextConfig:
+    if count_tokens not in ("estimate", "api"):
+        raise typer.BadParameter("--count-tokens must be 'estimate' or 'api'")
+    return ContextConfig(
+        clear_tool_results_at=clear_at or None,
+        server_clear_at=server_clear_at or None,
+        compact_at=compact_at or None,
+        notes=notes,
+        count_tokens=count_tokens,
+    )
+
+
 def _check_sandbox(sandbox: str) -> None:
     if sandbox not in ("docker", "none"):
         raise typer.BadParameter("--sandbox must be 'docker' or 'none'")
@@ -116,10 +145,17 @@ def run(
     tools: str = _TOOLS,
     keep: bool = typer.Option(False, help="Print the workspace path to inspect it."),
     sandbox: str = _SANDBOX,
+    clear_at: int = _CLEAR_AT,
+    server_clear_at: int = _SERVER_CLEAR_AT,
+    compact_at: int = _COMPACT_AT,
+    notes: bool = _NOTES,
+    count_tokens: str = _COUNT_TOKENS,
+    max_cost: float = _MAX_COST,
 ) -> None:
     """Run the agent on one benchmark task in a fresh copy of its repo, then grade it."""
     task = load_task(TASKS_DIR / task_id)
     _check_sandbox(sandbox)
+    context = _context(clear_at, server_clear_at, compact_at, notes, count_tokens)
     workdir = Path(tempfile.mkdtemp(prefix="miniagent-"))
     repo = prepare_workspace(task, workdir)
     config = _config(
@@ -129,6 +165,8 @@ def run(
         max_steps=task.max_steps,
         timeout_s=task.timeout_s,
         share_python_env=True,  # task repos use miniagent's env (numpy etc.)
+        context=context,
+        max_cost_usd=max_cost,
     )
     transcript = _transcript_path(task.id)
 
@@ -178,6 +216,12 @@ def run_repo(
         help="Network inside the sandbox. On by default so `uv run` can install your "
         "repo's dependencies; --no-network if they're already vendored.",
     ),
+    clear_at: int = _CLEAR_AT,
+    server_clear_at: int = _SERVER_CLEAR_AT,
+    compact_at: int = _COMPACT_AT,
+    notes: bool = _NOTES,
+    count_tokens: str = _COUNT_TOKENS,
+    max_cost: float = _MAX_COST,
 ) -> None:
     """Run the agent on a copy of your repository. Your repo and its git are never touched.
 
@@ -191,6 +235,8 @@ def run_repo(
         max_steps=max_steps,
         timeout_s=timeout_s,
         test_timeout_s=test_timeout_s,
+        context=_context(clear_at, server_clear_at, compact_at, notes, count_tokens),
+        max_cost_usd=max_cost,
     )
     try:
         workspace = create_workspace(path)
@@ -259,6 +305,12 @@ def _print_result(result: Any, transcript: Path) -> None:
     console.print(
         f"tokens  in: {result.input_tokens}  cache read: {result.cache_read_tokens}  "
         f"cache write: {result.cache_write_tokens}  out: {result.output_tokens}"
+    )
+    cost = f"${result.cost_usd:.4f}" if result.cost_usd is not None else "n/a (model not priced)"
+    console.print(
+        f"cost: {cost}   cache hit rate: {result.cache_hit_rate:.0%}   "
+        f"peak context: {result.peak_context_tokens} tokens   "
+        f"clears: {result.clears}   compactions: {result.compactions}"
     )
     console.print(f"wall time: {result.wall_time_s}s   transcript: {transcript}")
     if result.summary:
